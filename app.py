@@ -17,7 +17,7 @@ gemini_key = st.text_input("Google Gemini API Key (free at https://aistudio.goog
 if gemini_key:
     genai.configure(api_key=gemini_key)
 
-# ====================== XERO AUTH (sidebar) ======================
+# ====================== XERO AUTH ======================
 st.sidebar.header("Xero Connection")
 client_id = st.sidebar.text_input("Xero Client ID")
 client_secret = st.sidebar.text_input("Xero Client Secret", type="password")
@@ -27,14 +27,14 @@ if "xero_token" not in st.session_state:
 
 redirect_uri = st.sidebar.text_input(
     "Redirect URI (your current app URL)",
-    value=st.runtime.get_instance()._session_data.get("streamlit_cloud_url", "https://your-app.streamlit.app"),
-    help="Paste your live Streamlit URL here"
+    value="https://your-app-name.streamlit.app",
+    help="Replace this with your actual live URL (e.g. https://sv73cegtejaoux4ldhrt.streamlit.app)"
 )
 
 if client_id and client_secret and st.sidebar.button("🔑 Connect to Xero"):
     auth_url = f"https://login.xero.com/identity/connect/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=accounting.transactions offline_access&state=12345"
     st.sidebar.markdown(f"[Click here to log into Xero →]({auth_url})")
-    st.sidebar.info("After login, copy the FULL browser URL and paste below")
+    st.sidebar.info("After login, copy the FULL browser URL and paste it below")
 
 auth_code = st.sidebar.text_input("Paste the full redirect URL here")
 if auth_code and client_id and client_secret and st.sidebar.button("Exchange for Token"):
@@ -54,7 +54,7 @@ if auth_code and client_id and client_secret and st.sidebar.button("Exchange for
     else:
         st.sidebar.error("Token exchange failed")
 
-# ====================== UPLOAD & OCR (now runs immediately) ======================
+# ====================== OCR (runs immediately) ======================
 uploaded_file = st.file_uploader("Upload invoice / bill (PDF or image)", type=["pdf", "png", "jpg", "jpeg"])
 
 if uploaded_file and gemini_key:
@@ -73,7 +73,7 @@ if uploaded_file and gemini_key:
     Return ONLY valid JSON, no extra text.
     """
 
-    with st.spinner("Running Gemini OCR..."):
+    with st.spinner("Running Gemini OCR on your invoice..."):
         response = model.generate_content([prompt, {"mime_type": mime_type, "data": file_bytes}])
         try:
             raw = response.text.strip("```json").strip("```").strip()
@@ -103,9 +103,8 @@ if uploaded_file and gemini_key:
 
             if st.button("🚀 Create Bill Directly in Xero", type="primary"):
                 if not st.session_state.get("xero_token"):
-                    st.error("Please connect to Xero first in the sidebar")
+                    st.error("Please connect to Xero in the sidebar first")
                 else:
-                    # (Create bill code remains the same)
                     config = Configuration(oauth2_token=st.session_state.xero_token)
                     api_client = ApiClient(config)
                     accounting_api = AccountingApi(api_client)
