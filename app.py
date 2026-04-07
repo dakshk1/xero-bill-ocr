@@ -61,7 +61,7 @@ if uploaded_file and gemini_key:
     file_bytes = uploaded_file.read()
     mime_type = uploaded_file.type
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash-latest")
     prompt = """
     You are an expert Australian accountant. Extract this invoice as clean JSON only.
     Required keys:
