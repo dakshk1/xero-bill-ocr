@@ -9,7 +9,7 @@ from xero_python.accounting.models import LineAmountTypes
 from xero_python.api_client import ApiClient, Configuration
 from xero_python.api_client.oauth2 import OAuth2Token
 
-st.set_page_config(page_title="Free Xero Bill OCR", layout="wide")
+st.set_page_config(page_title="Free Xero Bill Creator", layout="wide")
 st.title("🆓 Free Xero Bill Creator (Gemini OCR)")
 
 # ====================== GEMINI (free) ======================
@@ -27,17 +27,17 @@ if "xero_token" not in st.session_state:
 
 redirect_uri = st.sidebar.text_input(
     "Redirect URI (your current app URL)",
-    value="https://your-app-name.streamlit.app",
-    help="Replace this with your actual live URL (e.g. https://sv73cegtejaoux4ldhrt.streamlit.app)"
+    value="https://wvsv73cegtejaoux4ldhrt.streamlit.app",   # ← replace with your actual URL if different
+    help="Copy your live app URL from the browser and paste here"
 )
 
-if client_id and client_secret and st.sidebar.button("🔑 Connect to Xero"):
+if client_id and client_secret and st.sidebar.button("🔑 Connect to Xero", use_container_width=True):
     auth_url = f"https://login.xero.com/identity/connect/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=accounting.transactions offline_access&state=12345"
     st.sidebar.markdown(f"[Click here to log into Xero →]({auth_url})")
     st.sidebar.info("After login, copy the FULL browser URL and paste it below")
 
 auth_code = st.sidebar.text_input("Paste the full redirect URL here")
-if auth_code and client_id and client_secret and st.sidebar.button("Exchange for Token"):
+if auth_code and client_id and client_secret and st.sidebar.button("Exchange for Token", use_container_width=True):
     code = auth_code.split("code=")[1].split("&")[0] if "code=" in auth_code else auth_code.strip()
     token_url = "https://identity.xero.com/connect/token"
     data = {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}
@@ -62,6 +62,8 @@ if uploaded_file and gemini_key:
     mime_type = uploaded_file.type
 
     model = genai.GenerativeModel("gemini-2.5-flash")
+
+    # Improved prompt for much better Australian GST detection
     prompt = """
     You are an expert Australian accountant. Extract this invoice as clean JSON only.
     Required keys:
@@ -69,11 +71,22 @@ if uploaded_file and gemini_key:
     - invoice_number
     - invoice_date (YYYY-MM-DD)
     - due_date (YYYY-MM-DD or null)
-    - line_items: array of objects with exactly: description, quantity (number), unit_amount (number), line_total
+    - line_items: array of objects with exactly these keys:
+        - description
+        - quantity (number)
+        - unit_amount (number)
+        - line_total (number)
+        - tax_type (must be one of: "INPUT", "INPUT2", "EXEMPTINPUT", "CAPITALINPUT", "NONE" — choose based on Australian GST rules)
+    Rules for tax_type:
+    - Standard 10% GST → "INPUT"
+    - GST-free purchases → "INPUT2"
+    - Exempt or no GST → "NONE"
+    - Capital acquisitions → "CAPITALINPUT"
+    Be accurate with GST on every line.
     Return ONLY valid JSON, no extra text.
     """
 
-    with st.spinner("Running Gemini OCR on your invoice..."):
+    with st.spinner("Running Gemini OCR..."):
         response = model.generate_content([prompt, {"mime_type": mime_type, "data": file_bytes}])
         try:
             raw = response.text.strip("```json").strip("```").strip()
@@ -95,13 +108,25 @@ if uploaded_file and gemini_key:
 
             df = pd.DataFrame(data.get("line_items", []))
             if df.empty:
-                df = pd.DataFrame(columns=["description", "quantity", "unit_amount", "line_total"])
+                df = pd.DataFrame(columns=["description", "quantity", "unit_amount", "line_total", "tax_type"])
             df["account_code"] = default_account
-            df["tax_type"] = default_tax
+            df["tax_type"] = df.get("tax_type", default_tax)
 
-            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+            edited_df = st.data_editor(
+                df,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "description": st.column_config.TextColumn("Description", width="large"),
+                    "quantity": st.column_config.NumberColumn("Qty", width="small"),
+                    "unit_amount": st.column_config.NumberColumn("Unit $", width="small"),
+                    "line_total": st.column_config.NumberColumn("Line Total", width="small"),
+                    "account_code": st.column_config.TextColumn("Account Code", width="small"),
+                    "tax_type": st.column_config.SelectboxColumn("Tax Type", options=["INPUT", "INPUT2", "EXEMPTINPUT", "NONE"], width="small")
+                }
+            )
 
-            if st.button("🚀 Create Bill Directly in Xero", type="primary"):
+            if st.button("🚀 Create Bill Directly in Xero", type="primary", use_container_width=True):
                 if not st.session_state.get("xero_token"):
                     st.error("Please connect to Xero in the sidebar first")
                 else:
@@ -137,4 +162,4 @@ if uploaded_file and gemini_key:
         except Exception as e:
             st.error(f"OCR error: {e}")
 
-st.caption("100% free • Gemini OCR • Direct to Xero")
+st.caption("100% free • Gemini OCR • Direct to Xero • Mobile friendly")
