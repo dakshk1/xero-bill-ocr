@@ -12,7 +12,7 @@ from xero_python.api_client.oauth2 import OAuth2Token
 st.set_page_config(page_title="Free Xero Bill Creator", layout="wide")
 st.title("🆓 Free Xero Bill Creator (Gemini OCR)")
 
-# ====================== GEMINI (free) ======================
+# ====================== GEMINI ======================
 gemini_key = st.text_input("Google Gemini API Key (free at https://aistudio.google.com)", type="password")
 if gemini_key:
     genai.configure(api_key=gemini_key)
@@ -25,36 +25,41 @@ client_secret = st.sidebar.text_input("Xero Client Secret", type="password")
 if "xero_token" not in st.session_state:
     st.session_state.xero_token = None
 
+# Use the current live URL automatically
 redirect_uri = st.sidebar.text_input(
-    "Redirect URI (your current app URL)",
-    value="https://wvsv73cegtejaoux4ldhrt.streamlit.app",   # ← replace with your actual URL if different
-    help="Copy your live app URL from the browser and paste here"
+    "Redirect URI (your live app URL)",
+    value=st.query_params.get("streamlit_cloud_url", ["https://your-app.streamlit.app"])[0],
+    help="Copy the full URL from your browser address bar"
 )
 
 if client_id and client_secret and st.sidebar.button("🔑 Connect to Xero", use_container_width=True):
     auth_url = f"https://login.xero.com/identity/connect/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=accounting.transactions offline_access&state=12345"
     st.sidebar.markdown(f"[Click here to log into Xero →]({auth_url})")
-    st.sidebar.info("After login, copy the FULL browser URL and paste it below")
+    st.sidebar.info("After login, copy the FULL browser URL and paste below")
 
 auth_code = st.sidebar.text_input("Paste the full redirect URL here")
 if auth_code and client_id and client_secret and st.sidebar.button("Exchange for Token", use_container_width=True):
-    code = auth_code.split("code=")[1].split("&")[0] if "code=" in auth_code else auth_code.strip()
-    token_url = "https://identity.xero.com/connect/token"
-    data = {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}
-    response = requests.post(token_url, data=data, auth=(client_id, client_secret))
-    if response.status_code == 200:
-        tokens = response.json()
-        st.session_state.xero_token = OAuth2Token(
-            client_id=client_id, client_secret=client_secret,
-            access_token=tokens["access_token"],
-            refresh_token=tokens.get("refresh_token"),
-            expires_at=datetime.now().timestamp() + tokens["expires_in"]
-        )
-        st.sidebar.success("✅ Connected to Xero!")
-    else:
-        st.sidebar.error("Token exchange failed")
+    try:
+        code = auth_code.split("code=")[1].split("&")[0] if "code=" in auth_code else auth_code.strip()
+        token_url = "https://identity.xero.com/connect/token"
+        data = {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}
+        response = requests.post(token_url, data=data, auth=(client_id, client_secret))
+        if response.status_code == 200:
+            tokens = response.json()
+            st.session_state.xero_token = OAuth2Token(
+                client_id=client_id,
+                client_secret=client_secret,
+                access_token=tokens["access_token"],
+                refresh_token=tokens.get("refresh_token"),
+                expires_at=datetime.now().timestamp() + tokens["expires_in"]
+            )
+            st.sidebar.success("✅ Connected to Xero!")
+        else:
+            st.sidebar.error(f"Token exchange failed: {response.text}")
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
 
-# ====================== OCR (runs immediately) ======================
+# ====================== OCR ======================
 uploaded_file = st.file_uploader("Upload invoice / bill (PDF or image)", type=["pdf", "png", "jpg", "jpeg"])
 
 if uploaded_file and gemini_key:
@@ -63,7 +68,6 @@ if uploaded_file and gemini_key:
 
     model = genai.GenerativeModel("gemini-2.5-flash")
 
-    # Improved prompt for much better Australian GST detection
     prompt = """
     You are an expert Australian accountant. Extract this invoice as clean JSON only.
     Required keys:
@@ -71,18 +75,12 @@ if uploaded_file and gemini_key:
     - invoice_number
     - invoice_date (YYYY-MM-DD)
     - due_date (YYYY-MM-DD or null)
-    - line_items: array of objects with exactly these keys:
-        - description
-        - quantity (number)
-        - unit_amount (number)
-        - line_total (number)
-        - tax_type (must be one of: "INPUT", "INPUT2", "EXEMPTINPUT", "CAPITALINPUT", "NONE" — choose based on Australian GST rules)
-    Rules for tax_type:
-    - Standard 10% GST → "INPUT"
-    - GST-free purchases → "INPUT2"
-    - Exempt or no GST → "NONE"
+    - line_items: array of objects with: description, quantity (number), unit_amount (number), line_total (number), tax_type
+    Tax type rules (Australian GST):
+    - 10% GST line → "INPUT"
+    - GST-free → "INPUT2"
+    - Exempt / no GST → "NONE"
     - Capital acquisitions → "CAPITALINPUT"
-    Be accurate with GST on every line.
     Return ONLY valid JSON, no extra text.
     """
 
@@ -110,7 +108,8 @@ if uploaded_file and gemini_key:
             if df.empty:
                 df = pd.DataFrame(columns=["description", "quantity", "unit_amount", "line_total", "tax_type"])
             df["account_code"] = default_account
-            df["tax_type"] = df.get("tax_type", default_tax)
+            if "tax_type" not in df.columns:
+                df["tax_type"] = default_tax
 
             edited_df = st.data_editor(
                 df,
@@ -121,12 +120,12 @@ if uploaded_file and gemini_key:
                     "quantity": st.column_config.NumberColumn("Qty", width="small"),
                     "unit_amount": st.column_config.NumberColumn("Unit $", width="small"),
                     "line_total": st.column_config.NumberColumn("Line Total", width="small"),
-                    "account_code": st.column_config.TextColumn("Account Code", width="small"),
+                    "account_code": st.column_config.TextColumn("Account", width="small"),
                     "tax_type": st.column_config.SelectboxColumn("Tax Type", options=["INPUT", "INPUT2", "EXEMPTINPUT", "NONE"], width="small")
                 }
             )
 
-            if st.button("🚀 Create Bill Directly in Xero", type="primary", use_container_width=True):
+            if st.button("🚀 Create Bill Directly in Xero + Attach PDF", type="primary", use_container_width=True):
                 if not st.session_state.get("xero_token"):
                     st.error("Please connect to Xero in the sidebar first")
                 else:
@@ -157,9 +156,22 @@ if uploaded_file and gemini_key:
 
                     result = accounting_api.create_invoices(xero_tenant_id=None, invoices=[invoice])
                     created = result.invoices[0]
-                    st.success(f"✅ Bill created as {bill_status}!")
+
+                    # Attach the original PDF
+                    accounting_api.create_invoice_attachment(
+                        xero_tenant_id=None,
+                        invoice_id=created.invoice_id,
+                        filename=uploaded_file.name,
+                        file_content=file_bytes,
+                        mime_type=mime_type
+                    )
+
+                    st.success(f"✅ Bill created as {bill_status} with PDF attached!")
                     st.markdown(f"[Open the bill in Xero →](https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID={created.invoice_id})")
         except Exception as e:
             st.error(f"OCR error: {e}")
 
-st.caption("100% free • Gemini OCR • Direct to Xero • Mobile friendly")
+if st.button("Clear uploaded file"):
+    st.rerun()
+
+st.caption("100% free • Gemini OCR • Direct to Xero • PDF attached automatically")
